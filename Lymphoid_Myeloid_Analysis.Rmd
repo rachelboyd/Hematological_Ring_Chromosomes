@@ -1,0 +1,1179 @@
+---
+title: "Analysis of Lymphoid vs Myeloid Malignancies"
+author: "Rachel Boyd"
+date: "2023-08-17"
+output: html_document
+---
+
+# Split "filtered_data" and "result_df" into myeloid vs. lymphoid
+```{r}
+# Load required libraries:
+library(readxl)
+library(openxlsx)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+
+filtered_data <- read_excel("C:/Users/rboyd25/OneDrive - Johns Hopkins/Documents/Hopkins/McCallion/Papers/Zou_Ring_Chromosomes_Cancer/filtered_data.xlsx")
+
+split_dataframes <- split(filtered_data, filtered_data$type)
+filtered_myeloid <- split_dataframes$myeloid
+filtered_lymphoid <- split_dataframes$lymphoid
+rm(split_dataframes)
+
+write.xlsx(filtered_myeloid, file = "filtered_myeloid.xlsx", rowNames = FALSE)
+```
+
+# Recall custom functions (also found in cyto_parse script, but included here in case analysis is started in a naive R session)
+```{r}
+calculate_X_value <- function(value) {
+  if (is.na(value))
+    return(0)
+  else if (grepl("\\(X\\)", value))
+    return(1)
+  else
+    return(0)
+}
+
+calculate_Y_value <- function(value) {
+  if (is.na(value))
+    return(0)
+  else if (grepl("-Y", value))
+    return(1)
+  else
+    return(0)
+}
+
+
+columns_to_apply <- 9:33
+
+
+add_sum_row <- function(df) {
+  sum_row <- df %>%
+    summarise(across(where(is.numeric), sum)) %>%
+    mutate(case_ID = "Total")
+
+  binary_total_row <- df %>%
+    summarise(across(where(is.numeric), ~ sum(. != 0))) %>%
+    mutate(case_ID = "Binary_Total")
+
+  df <- bind_rows(df, sum_row, binary_total_row)
+  return(df)
+}
+
+add_bin_row <- function(df) {
+  bin_row <- df %>%
+    summarise(across(where(is.numeric), sum)) %>%
+    mutate(case_ID = "Binary_Total")
+  
+  df <- bind_rows(df, bin_row)
+  return(df)
+}
+
+calculate_value <- function(value) {
+  # Trim leading and trailing spaces
+  value <- trimws(value)
+  
+  if (is.na(value) || value == "" || value == "NA")
+    return(0)
+  
+  # Count commas and add 1 to each count
+  comma_count <- sum(gregexpr(",", value)[[1]] >= 1) + 1
+  
+  return(comma_count)
+}
+```
+
+
+# **LYMPHOID ANALYSIS**
+
+# Histogram to show sum of affected chromosomes in each patient
+```{r}
+# Function to concatenate character values and remove duplicates
+concatenate_remove_duplicates <- function(x) {
+  x <- x[x != "NA"]
+  unique_values <- unique(unlist(strsplit(x, ",")))
+  return(toString(unique_values))
+}
+
+remove_duplicates <- function(x) {
+  unique_values <- unique(unlist(strsplit(x, ",")))
+  return(toString(unique_values))
+}
+
+# Summarize the dataframe (blank cells)
+filtered_lymphoid_blank <- filtered_lymphoid %>%
+  group_by(case_ID) %>%
+  summarize_all(.funs = list(concatenate_remove_duplicates))
+
+# With NA instead of blank
+filtered_lymphoid <- filtered_lymphoid %>%
+  group_by(case_ID) %>%
+  summarize_all(.funs = list(remove_duplicates))
+
+lymphoid_bin <- filtered_lymphoid_blank
+
+# Apply the X chromosome binary function to "X_chr" column
+lymphoid_bin$X_chr <- sapply(lymphoid_bin$X_chr, calculate_X_value)
+
+# Apply the Y chromosome binary function to "Y_chr" column
+lymphoid_bin$Y_chr <- sapply(lymphoid_bin$Y_chr, calculate_Y_value)
+
+# Apply chromosome binary function to chromosome columns
+lymphoid_bin[, columns_to_apply] <- lapply(lymphoid_bin[, columns_to_apply], function(x) sapply(x, calculate_value))
+
+# Apply binary sum function
+lymphoid_bin <- add_sum_row(lymphoid_bin)
+
+# Histogram with number of chr abnormalities
+library(ggplot2)
+
+# Restructure the dataframe for plotting:
+
+##Transpose the data frame using t()
+colnames(lymphoid_bin) <- c("case_ID", "indications","type", "mutations", "cell_num", "complement", "X", "Y","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","marker", "dmin","ring")
+
+transposed_lymphoid_df <- t(lymphoid_bin)
+
+##Convert the transposed data back to a data frame and reset row names
+transposed_lymphoid_df <- as.data.frame(transposed_lymphoid_df, stringsAsFactors = F)
+
+##Add a new column with row names as values
+transposed_lymphoid_df$Chromosome <- rownames(transposed_lymphoid_df)
+colnames(transposed_lymphoid_df) <- transposed_lymphoid_df[1, ]
+
+##Set row names to NULL (optional but recommended)
+rownames(transposed_lymphoid_df) <- NULL
+
+##Remove spaces
+transposed_lymphoid_df[] <- lapply(transposed_lymphoid_df, function(x) gsub("^\\s+", "", x))
+
+##Remove the first row since it's already set as column headers
+transposed_lymphoid_df <- transposed_lymphoid_df[-c(1:6,33),]
+
+transposed_lymphoid_df$case_ID <- factor(transposed_lymphoid_df$case_ID, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+transposed_lymphoid_df <- transposed_lymphoid_df %>%
+  mutate_at(vars(1:10), as.numeric)
+
+## Plot
+lymphoid_count_plot <- ggplot(transposed_lymphoid_df, aes(x=case_ID, y=Binary_Total)) +
+  geom_bar(stat="identity", fill="black", colour="black") +
+  labs(title="Distribution of Chromosomal Abnormalities Seen in Patient Karyotypes", 
+       subtitle="From n = 8 Patients with Lymphoid-Derived Cancers", 
+       x="Chromosome", 
+       y="Number of Patients") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 8, 1))
+
+
+# Save the ggplot as a PDF
+ggsave("lymphoid_count_plot.pdf", plot = lymphoid_count_plot, dpi = 300, width = 10, height = 5)
+```
+
+
+# Analysis of specific chromosomal abnormalities:
+# Reformat dataframe
+```{r}
+filtered_lymphoid <- filtered_lymphoid %>%
+  mutate(X_chr = ifelse(grepl("\\(X\\)", X_chr), X_chr, NA))
+
+filtered_lymphoid <- filtered_lymphoid %>%
+  mutate(Y_chr = ifelse(grepl("-Y", Y_chr), Y_chr, NA))
+
+filtered_lymphoid <- filtered_lymphoid[,-33]
+
+colnames(filtered_lymphoid) <- c("case_ID", "indications","type", "mutations", "cell_num", "complement", "X", "Y","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","marker", "dmin")
+
+filtered_lymphoid <- filtered_lymphoid %>% mutate(across(everything(), ~ ifelse(is.na(.), 0, .)))
+
+# Create a new dataframe to store the split rows
+lymphoid_sep <- data.frame()
+
+# Loop through each row
+for (i in 1:nrow(filtered_lymphoid)) {
+  # Get the case_ID value for the current row
+  case_ID <- filtered_lymphoid$case_ID[i]
+  
+  # Loop through columns 7 to 33
+  for (col_name in colnames(filtered_lymphoid)[7:32]) {
+    # Get the cell contents
+    cell_contents <- filtered_lymphoid[i, col_name]
+    
+    # Split the cell contents by ", "
+    substrings <- unlist(strsplit(as.character(cell_contents), ", "))
+    
+    # Create new rows for each substring
+    for (substring in substrings) {
+      lymphoid_sep <- rbind(lymphoid_sep, c(case_ID, col_name, substring))
+    }
+  }
+}
+
+# Set column names for the new dataframe
+colnames(lymphoid_sep) <- c("Original_Row", "Original_Column", "Substring")
+```
+
+
+# Add columns for specific mutations
+```{r}
+# Add new columns with the count of each mutation occurrence type
+lymphoid_sep <- lymphoid_sep %>%  mutate(add = str_count(Substring, "add"))
+
+lymphoid_sep <- lymphoid_sep %>%  mutate(del = str_count(Substring, "del"))
+
+lymphoid_sep <- lymphoid_sep %>% mutate(`+` = str_count(Substring, "\\+"))
+
+lymphoid_sep <- lymphoid_sep %>% mutate(`-` = str_count(Substring, "\\-"))
+
+lymphoid_sep <- lymphoid_sep %>%  mutate(`t` = str_count(Substring, "t\\("))
+
+lymphoid_sep <- lymphoid_sep %>%  mutate(`inv` = str_count(Substring, "inv"))
+
+lymphoid_sep <- lymphoid_sep %>%  mutate(`ins` = str_count(Substring, "ins"))
+
+lymphoid_sep <- lymphoid_sep %>%  mutate(`dup` = str_count(Substring, "dup"))
+
+lymphoid_sep <- lymphoid_sep %>%  mutate(`idic` = str_count(Substring, "idic"))
+
+lymphoid_sep <- lymphoid_sep %>% mutate(dic = str_count(Substring, "\\bdic\\b") - str_count(Substring, "\\bidic\\b"))
+
+lymphoid_sep <- lymphoid_sep %>%  mutate(`i` = str_count(Substring, "i\\("))
+
+lymphoid_sep <- lymphoid_sep %>%  mutate(`der` = str_count(Substring, "der"))
+
+lymphoid_sep <- lymphoid_sep %>%  mutate(`r(chr)` = str_count(Substring, "r\\(") - str_detect(Substring, "der\\("))
+```
+
+# Plot stacked bar plot
+```{r}
+# Reshape the data for plotting
+lymphoid_sep$Original_Column <- factor(lymphoid_sep$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+lymphoid_sep2 <- lymphoid_sep[, !colnames(lymphoid_sep) %in% "Substring"]
+
+lymphoid_stacked <- lymphoid_sep2 %>% group_by(Original_Column) %>%
+  summarize(across("add":"r(chr)", sum, na.rm = TRUE)) %>% gather(mutation, count, "add":"r(chr)")
+
+# Modify default palette for better distinction between bars
+library(scales)
+hue_pal()(13)
+colour_palette <- c("-"="#F8766D","+"="#E18A00", "add"="#BE9C00","del"="#8CAB00","der"="#24B700","dic"="#00BE70", "dup"="#00C1AB", "i"="#00BBDA", "ins"="#00ACFC", "inv"="#8B93FF", "iso"="#D575FE", "r(chr)"="rosybrown1","t"="#FF65AC")
+
+# Create the stacked bar plot using ggplot
+lymphoid_breakdown <- ggplot(lymphoid_stacked, aes(x = Original_Column, y = count, fill = mutation)) + geom_col(colour = "black") +
+  labs(title="Breakdown of Chromosomal Abnormalities by Chromosome", 
+       subtitle="From n = 8 Patients with Lymphoid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequeny of Mutation", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 20, 1)) +
+  scale_fill_manual(values = colour_palette)
+
+# Save the ggplot as a SVG image
+ggsave("lymphoid_breakdown.pdf", plot = lymphoid_breakdown, dpi = 300, width = 10, height = 5)
+```
+
+# Stacked bar chart normalized by chromosome size
+```{r}
+normalized_lymphoid <- lymphoid_stacked
+# Define a function to calculate log_count based on Original_Column and count
+log_normalized_chromosome <- function(original_value, count) {
+  if (count == 0) {
+    log_count <- NA
+  } else if (original_value == 1) {
+    log_count <- -log10(count / 248956)
+  } else if (original_value == 2) {
+    log_count <- -log10(count / 242194)
+  } else if (original_value == 3) {
+    log_count <- -log10(count / 198296)
+  } else if (original_value == 4) {
+    log_count <- -log10(count / 190215)
+  } else if (original_value == 5) {
+    log_count <- -log10(count / 181538)
+  } else if (original_value == 6) {
+    log_count <- -log10(count / 170806)
+  } else if (original_value == 7) {
+    log_count <- -log10(count / 159346)
+  } else if (original_value == 8) {
+    log_count <- -log10(count / 145139)
+  } else if (original_value == 9) {
+    log_count <- -log10(count / 138395)
+  } else if (original_value == 10) {
+    log_count <- -log10(count / 133797)
+  } else if (original_value == 11) {
+    log_count <- -log10(count / 135087)
+  } else if (original_value == 12) {
+    log_count <- -log10(count / 133275)
+  } else if (original_value == 13) {
+    log_count <- -log10(count / 114364)
+  } else if (original_value == 14) {
+    log_count <- -log10(count / 107044)
+  } else if (original_value == 15) {
+    log_count <- -log10(count / 101991)
+  } else if (original_value == 16) {
+    log_count <- -log10(count / 90338)
+  } else if (original_value == 17) {
+    log_count <- -log10(count / 83257)
+  } else if (original_value == 18) {
+    log_count <- -log10(count / 80373)
+  } else if (original_value == 19) {
+    log_count <- -log10(count / 58618)
+  } else if (original_value == 20) {
+    log_count <- -log10(count / 64444)
+  } else if (original_value == 21) {
+    log_count <- -log10(count / 46710)
+  } else if (original_value == 22) {
+    log_count <- -log10(count / 50818)
+  } else if (original_value == "X") {
+    log_count <- -log10(count / 156041)
+  } else if (original_value == "Y") {
+    log_count <- -log10(count / 57227)
+  } else {
+    log_count <- NA  # Handle other cases
+  }
+  return(log_count)
+}
+
+# Apply the function to create the log_count column
+normalized_lymphoid$log_count <- mapply(log_normalized_chromosome, normalized_lymphoid$Original_Column, normalized_lymphoid$count)
+
+ggplot(normalized_lymphoid, aes(x = Original_Column, y = log_count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Breakdown of Chromosomal Abnormalities by Chromosome \n(-log10 Normalized by Chromosome Size)", 
+       subtitle="From n = 8 Patients with Lymphoid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "-log10 Frequency of Karyotype Abnormality/kbp", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 40, 5), limits = c(0,40))+
+  scale_fill_manual(values = colour_palette)
+```
+
+# Analysis of common mutations
+```{r}
+# Not relevant for the lymphoid dataset!
+```
+
+# P and Q for add & del:
+```{r}
+# ADD
+lymphoid_adds <- lymphoid_sep %>% filter(str_detect(Substring, "add"))
+lymphoid_adds <- lymphoid_adds %>%
+  mutate(p = ifelse(str_detect(Substring, "addl?\\(.*p"), 1, 0),
+         q = ifelse(str_detect(Substring, "addl?\\(.*q"), 1, 0))
+
+lymphoid_adds$Original_Column <- factor(lymphoid_adds$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+lymphoid_adds <- lymphoid_adds[, !colnames(lymphoid_adds) %in% "Substring"]
+
+lymphoid_adds <- lymphoid_adds %>% group_by(Original_Column) %>%
+  summarize(across("p":"q", sum, na.rm = TRUE)) %>% gather(mutation, count, "p":"q")
+
+# Create the stacked bar plot using ggplot
+lymphoid_add_breakdown <- ggplot(lymphoid_adds, aes(x = Original_Column, y = count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Cytogenetic Location of Additional Genetic Material Present in Patient Karyotypes", 
+       subtitle="From n = 8 Patients with Lymphoid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequency", 
+       fill = "Chromosome Arm") +
+  theme_classic() +
+  theme(legend.position = "top",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 7, 1))
+
+# Save the ggplot as a PNG image
+ggsave("lymphoid_add_breakdown.pdf", plot = lymphoid_add_breakdown, dpi = 300, width = 10, height = 5)
+
+# DEL
+
+lymphoid_dels <- lymphoid_sep %>% filter(str_detect(Substring, "del"))
+lymphoid_dels <- lymphoid_dels %>%
+  mutate(p = ifelse(str_detect(Substring, "del\\(.*p"), 1, 0),
+         q = ifelse(str_detect(Substring, "del\\(.*q"), 1, 0))
+
+lymphoid_dels$Original_Column <- factor(lymphoid_dels$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+lymphoid_dels <- lymphoid_dels[, !colnames(lymphoid_dels) %in% "Substring"]
+
+lymphoid_dels <- lymphoid_dels %>% group_by(Original_Column) %>%
+  summarize(across("p":"q", sum, na.rm = TRUE)) %>% gather(mutation, count, "p":"q")
+
+# Create the stacked bar plot using ggplot
+lymphoid_del_breakdown <- ggplot(lymphoid_dels, aes(x = Original_Column, y = count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Cytogenetic Location of Deleted Regions in Patient Karyotypes", 
+       subtitle="From n = 8 Patients with Lymphoid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequency", 
+       fill = "Chromosome Arm") +
+  theme_classic() +
+  theme(legend.position = "top",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 7, 1))
+
+# Save the ggplot as a PNG image
+ggsave("lymphoid_del_breakdown.pdf", plot = lymphoid_del_breakdown, dpi = 300, width = 10, height = 5)
+```
+
+
+```{r}
+# TRANSLOCATIONS
+
+# lymphoid_translocations <- lymphoid_sep %>% filter(str_detect(Substring, "t\\("))
+# lymphoid_translocations <-lymphoid_translocations %>%
+# mutate(
+#     p = ifelse(
+#       str_detect(Substring, "\\(p.*?; p.*?\\)|\\(p.*?;\\s*p.*?\\)"), 1, 0
+#     ),
+#     q = ifelse(
+#       str_detect(Substring, "\\(q.*?; q.*?\\)|\\(q.*?;\\s*q.*?\\)"), 1, 0
+#     ),
+#     `p-q` = ifelse(
+#       str_detect(Substring, "\\(p.*?; q.*?\\)|\\(p.*?;\\s*q.*?\\)"), 1, 0
+#     ),
+#     `q-p` = ifelse(
+#       str_detect(Substring, "\\(q.*?; p.*?\\)|\\(q.*?;\\s*p.*?\\)"), 1, 0
+#     )
+#   )
+
+
+# lymphoid_translocations$Original_Column <- factor(lymphoid_translocations$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+# 
+# lymphoid_translocations <- lymphoid_translocations[, !colnames(lymphoid_translocations) %in% "Substring"]
+# 
+# lymphoid_translocations <- lymphoid_translocations %>% group_by(Original_Column) %>%
+#   summarize(across("p":"q-p", sum, na.rm = TRUE)) %>% gather(mutation, count, "p":"q-p")
+# 
+# # Create the stacked bar plot using ggplot
+# lymphoid_translocations_breakdown <- ggplot(lymphoid_translocations, aes(x = Original_Column, y = count, fill = mutation)) +
+#   geom_col(colour = "black") +
+#   labs(title="Cytogenetic Location of Translocated Regions in Patient Karyotypes", 
+#        subtitle="From n = 8 Patients with Lymphoid-Derived Cancers", 
+#        x = "Chromosome", 
+#        y = "Frequency", 
+#        fill = "Chromosome Arm") +
+#   theme_classic() +
+#   theme(legend.position = "top",
+#         plot.title = element_text(hjust = 0.5),
+#         plot.subtitle = element_text(hjust = 0.5),
+#         axis.text.x = element_text(angle = 45, hjust = 1)) +
+#   scale_y_continuous(expand = c(0, 0),breaks = seq(0, 7, 1))+
+#   scale_fill_discrete(labels=c('p to p', 'p to q', 'q to q', 'q to p'))
+
+# Save the ggplot as a PNG image
+#ggsave("lymphoid_translocations_breakdown.png", plot = lymphoid_translocations_breakdown, dpi = 300, width = 10, height = 5)
+```
+
+
+
+***MYELOID ANALYSIS***
+
+# Histogram to show sum of affected chromosomes in each patient
+```{r}
+# Summarize the dataframe
+filtered_myeloid_blank <- filtered_myeloid %>%
+  group_by(case_ID) %>%
+  summarize_all(.funs = list(concatenate_remove_duplicates))
+
+# With NA instead of blank
+filtered_myeloid <- filtered_myeloid %>%
+  group_by(case_ID) %>%
+  summarize_all(.funs = list(remove_duplicates))
+
+myeloid_bin <- filtered_myeloid_blank
+
+# Apply the X chromosome binary function to "X_chr" column
+myeloid_bin$X_chr <- sapply(myeloid_bin$X_chr, calculate_X_value)
+
+# Apply the Y chromosome binary function to "Y_chr" column
+myeloid_bin$Y_chr <- sapply(myeloid_bin$Y_chr, calculate_Y_value)
+
+# Apply chromosome binary function to chromosome columns
+myeloid_bin[, columns_to_apply] <- lapply(myeloid_bin[, columns_to_apply], function(x) sapply(x, calculate_value))
+
+# Apply binary sum function
+myeloid_bin <- add_sum_row(myeloid_bin)
+
+# Restructure the dataframe for plotting:
+
+##Transpose the data frame using t()
+colnames(myeloid_bin) <- c("case_ID", "indications","type", "mutations", "cell_num", "complement", "X", "Y","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","marker", "dmin","ring")
+
+transposed_myeloid_df <- t(myeloid_bin)
+
+##Convert the transposed data back to a data frame and reset row names
+transposed_myeloid_df <- as.data.frame(transposed_myeloid_df, stringsAsFactors = F)
+
+##Add a new column with row names as values
+transposed_myeloid_df$Chromosome <- rownames(transposed_myeloid_df)
+colnames(transposed_myeloid_df) <- transposed_myeloid_df[1, ]
+
+##Set row names to NULL (optional but recommended)
+rownames(transposed_myeloid_df) <- NULL
+
+##Remove spaces
+transposed_myeloid_df[] <- lapply(transposed_myeloid_df, function(x) gsub("^\\s+", "", x))
+
+##Remove the first row since it's already set as column headers
+transposed_myeloid_df <- transposed_myeloid_df[-c(1:6,33),]
+
+transposed_myeloid_df$case_ID <- factor(transposed_myeloid_df$case_ID, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+transposed_myeloid_df <- transposed_myeloid_df %>%
+  mutate_at(vars(1:92), as.numeric)
+
+## Plot
+myeloid_count_plot <- ggplot(transposed_myeloid_df, aes(x=case_ID, y=Binary_Total)) +
+  geom_bar(stat="identity", fill="black", colour="black") +
+  labs(title="Distribution of Chromosomal Abnormalities Seen in Patient Karyotypes", 
+       subtitle="From n = 90 Patients with Myeloid-Derived Cancers", 
+       x="Chromosome", 
+       y="Number of Patients") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 60, 5), limits = c(0,60))
+  
+# Save the ggplot as a PDF
+ggsave("myeloid_count_plot.pdf", plot = myeloid_count_plot, dpi = 300, width = 10, height = 5)
+```
+
+
+# Analyze specific chromosomal abnormalities - reformat dataframe
+```{r}
+filtered_myeloid <- filtered_myeloid %>%
+  mutate(X_chr = ifelse(grepl("\\(X\\)", X_chr), X_chr, NA))
+
+filtered_myeloid <- filtered_myeloid %>%
+  mutate(Y_chr = ifelse(grepl("-Y", Y_chr), Y_chr, NA))
+
+filtered_myeloid <- filtered_myeloid[,-33]
+
+colnames(filtered_myeloid) <- c("case_ID", "indications","type", "mutations", "cell_num", "complement", "X", "Y","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","marker", "dmin")
+
+filtered_myeloid <- filtered_myeloid %>% mutate(across(everything(), ~ ifelse(is.na(.), 0, .)))
+
+# Create a new dataframe to store the split rows
+myeloid_sep <- data.frame()
+
+# Loop through each row
+for (i in 1:nrow(filtered_myeloid)) {
+  # Get the case_ID value for the current row
+  case_ID <- filtered_myeloid$case_ID[i]
+  
+  # Loop through columns 7 to 33
+  for (col_name in colnames(filtered_myeloid)[7:32]) {
+    # Get the cell contents
+    cell_contents <- filtered_myeloid[i, col_name]
+    
+    # Split the cell contents by ", "
+    substrings <- unlist(strsplit(as.character(cell_contents), ", "))
+    
+    # Create new rows for each substring
+    for (substring in substrings) {
+      myeloid_sep <- rbind(myeloid_sep, c(case_ID, col_name, substring))
+    }
+  }
+}
+
+# Set column names for the new dataframe
+colnames(myeloid_sep) <- c("Original_Row", "Original_Column", "Substring")
+```
+
+
+# Add columns for specific mutations
+```{r}
+# Add new columns with the count of each mutation occurrence type
+myeloid_sep <- myeloid_sep %>%  mutate(add = str_count(Substring, "add")) #
+
+myeloid_sep <- myeloid_sep %>%  mutate(del = str_count(Substring, "del")) #
+
+myeloid_sep <- myeloid_sep %>% mutate(`+` = str_count(Substring, "\\+"))
+
+myeloid_sep <- myeloid_sep %>% mutate(`-` = str_count(Substring, "\\-"))
+
+myeloid_sep <- myeloid_sep %>%  mutate(`t` = str_count(Substring, "t\\("))
+
+myeloid_sep <- myeloid_sep %>%  mutate(`inv` = str_count(Substring, "inv"))
+
+myeloid_sep <- myeloid_sep %>%  mutate(`ins` = str_count(Substring, "ins"))
+
+myeloid_sep <- myeloid_sep %>%  mutate(`dup` = str_count(Substring, "dup"))
+
+myeloid_sep <- myeloid_sep %>%  mutate(`i` = str_count(Substring, "idic"))
+
+myeloid_sep <- myeloid_sep %>% mutate(dic = str_count(Substring, "\\bdic\\b") - str_count(Substring, "\\bidic\\b"))
+
+myeloid_sep <- myeloid_sep %>%  mutate(`iso` = str_count(Substring, "i\\("))
+
+myeloid_sep <- myeloid_sep %>%  mutate(`der` = str_count(Substring, "der")) 
+
+myeloid_sep <- myeloid_sep %>%  mutate(`r(chr)` = str_count(Substring, "r\\(") - str_detect(Substring, "der\\("))
+```
+
+# Plot
+```{r}
+# Reshape the data for plotting
+myeloid_sep$Original_Column <- factor(myeloid_sep$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+myeloid_sep2 <- myeloid_sep[, !colnames(myeloid_sep) %in% "Substring"]
+
+myeloid_stacked <- myeloid_sep2 %>% group_by(Original_Column) %>%
+  summarize(across("add":"r(chr)", sum, na.rm = TRUE)) %>% gather(mutation, count, "add":"r(chr)")
+
+
+# Create the stacked bar plot using ggplot
+myeloid_breakdown <- ggplot(myeloid_stacked, aes(x = Original_Column, y = count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Breakdown of Chromosomal Abnormalities by Chromosome", 
+       subtitle="From n = 90 Patients with Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequeny of Mutation", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 90, 10), limits = c(0,90)) +
+  scale_fill_manual(values = colour_palette)
+
+# Save the ggplot as a PNG image
+ggsave("myeloid_breakdown.pdf", plot = myeloid_breakdown, dpi = 300, width = 10, height = 5)
+```
+
+# Stacked bar chart normalized by chromosome size
+```{r}
+normalized_myeloid <- myeloid_stacked
+
+# Apply the function to create the log_count column
+normalized_myeloid$log_count <- mapply(log_normalized_chromosome, normalized_myeloid$Original_Column, normalized_myeloid$count)
+
+normalized_myeloid_breakdown <- ggplot(normalized_myeloid, aes(x = Original_Column, y = log_count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Breakdown of Chromosomal Abnormalities by Chromosome \n(-log10 Normalized by Chromosome Size)", 
+       subtitle="From n = 90 Patients with Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "-log10 Normalized Karyotype Abnormality/kbp", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 50, 10), limits = c(0,50)) +
+  scale_fill_manual(values = colour_palette)
+
+ggsave("normalized_myeloid_breakdown.pdf", plot = normalized_myeloid_breakdown, dpi = 300, width = 10, height = 5)
+```
+
+
+# Analyze common mutations (by gene only - first string after a semicolon before space)
+```{r}
+# Function to extract first string before space and subsequent string after semicolon+space
+extract_strings <- function(text) {
+  first_string <- str_extract(text, "\\S+")  # Extract the first string before space
+  subsequent_strings <- str_extract_all(text, "(?<=;\\s)\\S+")  # Extract subsequent strings after semicolon+space
+  return(c(first_string, unlist(subsequent_strings)))  # Combine and return both extracted strings
+}
+
+# Extract and count the strings
+all_strings <- unlist(lapply(filtered_myeloid_blank$mutations, extract_strings))
+string_counts <- table(all_strings)
+
+# Plot the horizontal bar chart
+myeloid_mutation_count <- ggplot(data = data.frame(String = names(string_counts), Count = as.numeric(string_counts)),
+                    aes(x = Count, y = reorder(String, Count))) +
+  geom_bar(stat = "identity", fill = "black", colour = "black") +
+  labs(title = "Frequency of Predicted Pathogenic Variants Identified in Patient Exomes",
+       subtitle = "From n = 90 Patients with Myeloid-Derived Cancers",
+       x = "Frequency",
+       y = "Genes") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        panel.grid.major.x = element_line(colour = "grey", linetype = "solid"),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.y = element_text(size = 10, face = "italic"))+
+  scale_x_continuous(expand = c(0,0),breaks = seq(0, 52, 2), limits = c(0,52))
+
+ggsave("myeloid_mutation_count.pdf", plot = myeloid_mutation_count, dpi = 300, width = 7, height = 10)
+```
+
+# Breakdown stacked bar plot by TP53, TET2, NRAS, and non-TP53 mutation carriers only:
+# TP53
+```{r}
+# TP53
+myeloid_TP53 <- filtered_myeloid %>% filter(str_detect(mutations, "TP53"))
+
+# Create a new dataframe to store the split rows
+myeloid_sep_TP53 <- data.frame()
+
+# Loop through each row
+for (i in 1:nrow(myeloid_TP53)) {
+  # Get the case_ID value for the current row
+  case_ID_TP53 <- myeloid_TP53$case_ID[i]
+  
+  # Loop through columns 7 to 32
+  for (col_name in colnames(myeloid_TP53)[7:32]) {
+    # Get the cell contents
+    cell_contents_TP53 <- myeloid_TP53[i, col_name]
+    
+    # Split the cell contents by ", "
+    substrings_TP53 <- unlist(strsplit(as.character(cell_contents_TP53), ", "))
+    
+    # Create new rows for each substring
+    for (substring in substrings_TP53) {
+      myeloid_sep_TP53 <- rbind(myeloid_sep_TP53, c(case_ID, col_name, substring))
+    }
+  }
+}
+
+# Set column names for the new dataframe
+colnames(myeloid_sep_TP53) <- c("Original_Row", "Original_Column", "Substring")
+
+# Add new columns with the count of each mutation occurrence type
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(add = str_count(Substring, "add")) #
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(del = str_count(Substring, "del")) #
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>% mutate(`+` = str_count(Substring, "\\+"))
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>% mutate(`-` = str_count(Substring, "\\-"))
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(`t` = str_count(Substring, "t\\("))
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(`inv` = str_count(Substring, "inv"))
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(`ins` = str_count(Substring, "ins"))
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(`dup` = str_count(Substring, "dup"))
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(`i` = str_count(Substring, "idic"))
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>% mutate(dic = str_count(Substring, "\\bdic\\b") - str_count(Substring, "\\bidic\\b"))
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(`iso` = str_count(Substring, "i\\("))
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(`der` = str_count(Substring, "der")) 
+
+myeloid_sep_TP53 <- myeloid_sep_TP53 %>%  mutate(`r(chr)` = str_count(Substring, "r\\(") - str_detect(Substring, "der\\("))
+
+# Reshape the data for plotting
+myeloid_sep_TP53$Original_Column <- factor(myeloid_sep_TP53$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+
+myeloid_stacked_TP53 <- myeloid_sep_TP53 %>% group_by(Original_Column) %>%
+  summarize(across("add":"r(chr)", sum, na.rm = TRUE)) %>% gather(mutation, count, "add":"r(chr)")
+
+# Create the stacked bar plot using ggplot
+myeloid_TP53 <- ggplot(myeloid_stacked_TP53, aes(x = Original_Column, y = count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Chromosomal Abnormalities in Cancer Patients with TP53T Mutations", 
+       subtitle="From n = 39/58 Patients with Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequeny of Mutation", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 50, 5), limits = c(0,50)) +
+  scale_fill_manual(values = colour_palette)
+
+# Save the ggplot as a PNG image
+ggsave("myeloid_TP53.pdf", plot = myeloid_TP53, dpi = 300, width = 10, height = 5)
+```
+
+# Without TP53
+```{r}
+myeloid_noTP53 <- filtered_myeloid %>% filter(!str_detect(mutations, "TP53"))
+
+myeloid_noTP53 <- myeloid_noTP53[myeloid_noTP53$mutations != "NA", ]
+
+# Create a new dataframe to store the split rows
+myeloid_sep_noTP53 <- data.frame()
+
+# Loop through each row
+for (i in 1:nrow(myeloid_noTP53)) {
+  # Get the case_ID value for the current row
+  case_ID_noTP53 <- myeloid_noTP53$case_ID[i]
+  
+  # Loop through columns 7 to 32
+  for (col_name in colnames(myeloid_noTP53)[7:32]) {
+    # Get the cell contents
+    cell_contents_noTP53 <- myeloid_noTP53[i, col_name]
+    
+    # Split the cell contents by ", "
+    substrings_noTP53 <- unlist(strsplit(as.character(cell_contents_noTP53), ", "))
+    
+    # Create new rows for each substring
+    for (substring in substrings_noTP53) {
+      myeloid_sep_noTP53 <- rbind(myeloid_sep_noTP53, c(case_ID, col_name, substring))
+    }
+  }
+}
+
+# Set column names for the new dataframe
+colnames(myeloid_sep_noTP53) <- c("Original_Row", "Original_Column", "Substring")
+
+# Add new columns with the count of each mutation occurrence type
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(add = str_count(Substring, "add")) #
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(del = str_count(Substring, "del")) #
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>% mutate(`+` = str_count(Substring, "\\+"))
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>% mutate(`-` = str_count(Substring, "\\-"))
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(`t` = str_count(Substring, "t\\("))
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(`inv` = str_count(Substring, "inv"))
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(`ins` = str_count(Substring, "ins"))
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(`dup` = str_count(Substring, "dup"))
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(`i` = str_count(Substring, "idic"))
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>% mutate(dic = str_count(Substring, "\\bdic\\b") - str_count(Substring, "\\bidic\\b"))
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(`iso` = str_count(Substring, "i\\("))
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(`der` = str_count(Substring, "der")) 
+
+myeloid_sep_noTP53 <- myeloid_sep_noTP53 %>%  mutate(`r(chr)` = str_count(Substring, "r\\(") - str_detect(Substring, "der\\("))
+
+# Reshape the data for plotting
+myeloid_sep_noTP53$Original_Column <- factor(myeloid_sep_noTP53$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+myeloid_stacked_noTP53 <- myeloid_sep_noTP53 %>% group_by(Original_Column) %>%
+  summarize(across("add":"r(chr)", sum, na.rm = TRUE)) %>% gather(mutation, count, "add":"r(chr)")
+
+# Create the stacked bar plot using ggplot
+myeloid_no_TP53 <- ggplot(myeloid_stacked_noTP53, aes(x = Original_Column, y = count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Chromosomal Abnormalities in Cancer Patients without TP53T Mutations", 
+       subtitle="From n = 19/58 Patients with Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequeny of Mutation", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 10, 1), limits = c(0,10)) +
+  scale_fill_manual(values = colour_palette)
+
+# Save the ggplot as a PNG image
+ggsave("myeloid_no_TP53.pdf", plot = myeloid_no_TP53, dpi = 300, width = 10, height = 5)
+```
+
+# TET2
+```{r}
+# TET2
+myeloid_TET2 <- filtered_myeloid %>% filter(str_detect(mutations, "TET2"))
+
+# Create a new dataframe to store the split rows
+myeloid_sep_TET2 <- data.frame()
+
+# Loop through each row
+for (i in 1:nrow(myeloid_TET2)) {
+  # Get the case_ID value for the current row
+  case_ID_TET2 <- myeloid_TET2$case_ID[i]
+  
+  # Loop through columns 7 to 32
+  for (col_name in colnames(myeloid_TET2)[7:32]) {
+    # Get the cell contents
+    cell_contents_TET2 <- myeloid_TET2[i, col_name]
+    
+    # Split the cell contents by ", "
+    substrings_TET2 <- unlist(strsplit(as.character(cell_contents_TET2), ", "))
+    
+    # Create new rows for each substring
+    for (substring in substrings_TET2) {
+      myeloid_sep_TET2 <- rbind(myeloid_sep_TET2, c(case_ID, col_name, substring))
+    }
+  }
+}
+
+# Set column names for the new dataframe
+colnames(myeloid_sep_TET2) <- c("Original_Row", "Original_Column", "Substring")
+
+# Add new columns with the count of each mutation occurrence type
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(add = str_count(Substring, "add")) #
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(del = str_count(Substring, "del")) #
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>% mutate(`+` = str_count(Substring, "\\+"))
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>% mutate(`-` = str_count(Substring, "\\-"))
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(`t` = str_count(Substring, "t\\("))
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(`inv` = str_count(Substring, "inv"))
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(`ins` = str_count(Substring, "ins"))
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(`dup` = str_count(Substring, "dup"))
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(`i` = str_count(Substring, "idic"))
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>% mutate(dic = str_count(Substring, "\\bdic\\b") - str_count(Substring, "\\bidic\\b"))
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(`iso` = str_count(Substring, "i\\("))
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(`der` = str_count(Substring, "der")) 
+
+myeloid_sep_TET2 <- myeloid_sep_TET2 %>%  mutate(`r(chr)` = str_count(Substring, "r\\(") - str_detect(Substring, "der\\("))
+
+# Reshape the data for plotting
+myeloid_sep_TET2$Original_Column <- factor(myeloid_sep_TET2$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+
+myeloid_stacked_TET2 <- myeloid_sep_TET2 %>% group_by(Original_Column) %>%
+  summarize(across("add":"r(chr)", sum, na.rm = TRUE)) %>% gather(mutation, count, "add":"r(chr)")
+
+# Create the stacked bar plot using ggplot
+myeloid_TET2 <- ggplot(myeloid_stacked_TET2, aes(x = Original_Column, y = count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Chromosomal Abnormalities in Cancer Patients with TET2 Mutations", 
+       subtitle="From n = 8 Patients with Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequency of Mutation", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 4, 1), limits = c(0,4)) +
+  scale_fill_manual(values = colour_palette)
+
+# Save the ggplot as a PNG image
+ggsave("myeloid_TET2.pdf", plot = myeloid_TET2, dpi = 300, width = 10, height = 5)
+```
+
+# NRAS
+```{r}
+# NRAS
+myeloid_NRAS <- filtered_myeloid %>% filter(str_detect(mutations, "NRAS"))
+
+# Create a new dataframe to store the split rows
+myeloid_sep_NRAS <- data.frame()
+
+# Loop through each row
+for (i in 1:nrow(myeloid_NRAS)) {
+  # Get the case_ID value for the current row
+  case_ID_NRAS <- myeloid_NRAS$case_ID[i]
+  
+  # Loop through columns 7 to 32
+  for (col_name in colnames(myeloid_NRAS)[7:32]) {
+    # Get the cell contents
+    cell_contents_NRAS <- myeloid_NRAS[i, col_name]
+    
+    # Split the cell contents by ", "
+    substrings_NRAS <- unlist(strsplit(as.character(cell_contents_NRAS), ", "))
+    
+    # Create new rows for each substring
+    for (substring in substrings_NRAS) {
+      myeloid_sep_NRAS <- rbind(myeloid_sep_NRAS, c(case_ID, col_name, substring))
+    }
+  }
+}
+
+# Set column names for the new dataframe
+colnames(myeloid_sep_NRAS) <- c("Original_Row", "Original_Column", "Substring")
+
+# Add new columns with the count of each mutation occurrence type
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(add = str_count(Substring, "add")) #
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(del = str_count(Substring, "del")) #
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>% mutate(`+` = str_count(Substring, "\\+"))
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>% mutate(`-` = str_count(Substring, "\\-"))
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(`t` = str_count(Substring, "t\\("))
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(`inv` = str_count(Substring, "inv"))
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(`ins` = str_count(Substring, "ins"))
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(`dup` = str_count(Substring, "dup"))
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(`i` = str_count(Substring, "idic"))
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>% mutate(dic = str_count(Substring, "\\bdic\\b") - str_count(Substring, "\\bidic\\b"))
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(`iso` = str_count(Substring, "i\\("))
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(`der` = str_count(Substring, "der")) 
+
+myeloid_sep_NRAS <- myeloid_sep_NRAS %>%  mutate(`r(chr)` = str_count(Substring, "r\\(") - str_detect(Substring, "der\\("))
+
+# Reshape the data for plotting
+myeloid_sep_NRAS$Original_Column <- factor(myeloid_sep_NRAS$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin"))
+
+
+myeloid_stacked_NRAS <- myeloid_sep_NRAS %>% group_by(Original_Column) %>%
+  summarize(across("add":"r(chr)", sum, na.rm = TRUE)) %>% gather(mutation, count, "add":"r(chr)")
+
+# Create the stacked bar plot using ggplot
+myeloid_NRAS <- ggplot(myeloid_stacked_NRAS, aes(x = Original_Column, y = count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Chromosomal Abnormalities in Cancer Patients with NRAS Mutations", 
+       subtitle="From n = 7 Patients with Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequency of Mutation", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 5, 1), limits = c(0,5)) +
+  scale_fill_manual(values = colour_palette)
+
+# Save the ggplot as a PNG image
+ggsave("myeloid_NRAS.pdf", plot = myeloid_NRAS, dpi = 300, width = 10, height = 5)
+```
+
+
+# P and Q for add and del:
+```{r}
+# ADD
+myeloid_adds <- myeloid_sep %>% filter(str_detect(Substring, "add"))
+myeloid_adds <- myeloid_adds %>%
+  mutate(p = ifelse(str_detect(Substring, "addl?\\(.*p"), 1, 0),
+         q = ifelse(str_detect(Substring, "addl?\\(.*q"), 1, 0))
+
+myeloid_adds$Original_Column <- factor(myeloid_adds$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin","ring"))
+
+myeloid_adds <- myeloid_adds[, !colnames(myeloid_adds) %in% "Substring"]
+
+myeloid_adds <- myeloid_adds %>% group_by(Original_Column) %>%
+  summarize(across("p":"q", sum, na.rm = TRUE)) %>% gather(mutation, count, "p":"q")
+
+# Create the stacked bar plot using ggplot
+myeloid_add_breakdown <- ggplot(myeloid_adds, aes(x = Original_Column, y = count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Cytogenetic Location of Additional Genetic Material Present in Patient Karyotypes", 
+       subtitle="From n = 90 Patients with Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequency (add)", 
+       fill = "Chromosome Arm") +
+  theme_classic() +
+  theme(legend.position = "top",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 25, 5), limit = c(0,25))
+
+# Save the ggplot as a PNG image
+ggsave("myeloid_add_breakdown.pdf", plot = myeloid_add_breakdown, dpi = 300, width = 10, height = 5)
+
+# DEL
+
+myeloid_dels <- myeloid_sep %>% filter(str_detect(Substring, "del"))
+myeloid_dels <- myeloid_dels %>%
+  mutate(p = ifelse(str_detect(Substring, "del\\(.*p"), 1, 0),
+         q = ifelse(str_detect(Substring, "del\\(.*q"), 1, 0))
+
+myeloid_dels$Original_Column <- factor(myeloid_dels$Original_Column, levels = c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y","marker","dmin","ring"))
+
+myeloid_dels <- myeloid_dels[, !colnames(myeloid_dels) %in% "Substring"]
+
+myeloid_dels <- myeloid_dels %>% group_by(Original_Column) %>%
+  summarize(across("p":"q", sum, na.rm = TRUE)) %>% gather(mutation, count, "p":"q")
+
+# Create the stacked bar plot using ggplot
+myeloid_del_breakdown <- ggplot(myeloid_dels, aes(x = Original_Column, y = count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Cytogenetic Location of Deleted Regions in Patient Karyotypes", 
+       subtitle="From n = 90 Patients with Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "Frequency (del)", 
+       fill = "Chromosome Arm") +
+  theme_classic() +
+  theme(legend.position = "top",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 20, 2))
+
+# Save the ggplot as a PNG image
+ggsave("myeloid_del_breakdown.pdf", plot = myeloid_del_breakdown, dpi = 300, width = 10, height = 5)
+```
+
+# Stacked bar chart normalized by chromosome size (TP53 vs non-TP53)
+```{r}
+normalized_myeloid_TP53 <- myeloid_stacked_TP53
+
+# Apply the function to create the log_count column
+normalized_myeloid_TP53 $log_count <- mapply(log_normalized_chromosome, normalized_myeloid_TP53 $Original_Column, normalized_myeloid_TP53 $count)
+
+normalized_myeloid_TP53_breakdown <- ggplot(normalized_myeloid_TP53 , aes(x = Original_Column, y = log_count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Breakdown of Chromosomal Abnormalities by Chromosome \n(-log10 Normalized by Chromosome Size)", 
+       subtitle="From n = 39 Patients with TP53 Mutations in Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "-log10 Normalized Karyotype Abnormality/kbp", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 45, 5), limits = c(0,45)) +
+  scale_fill_manual(values = colour_palette)
+
+ggsave("normalized_myeloid_TP53_breakdown.pdf", plot = normalized_myeloid_TP53_breakdown, dpi = 300, width = 10, height = 5)
+```
+
+# Stacked bar chart normalized by chromosome size (TP53 vs non-TP53)
+```{r}
+normalized_myeloid_noTP53 <- myeloid_stacked_noTP53
+
+# Apply the function to create the log_count column
+normalized_myeloid_noTP53 $log_count <- mapply(log_normalized_chromosome, normalized_myeloid_noTP53 $Original_Column, normalized_myeloid_noTP53 $count)
+
+normalized_myeloid_noTP53_breakdown <- ggplot(normalized_myeloid_noTP53, aes(x = Original_Column, y = log_count, fill = mutation)) +
+  geom_col(colour = "black") +
+  labs(title="Breakdown of Chromosomal Abnormalities by Chromosome \n(-log10 Normalized by Chromosome Size)", 
+       subtitle="From n = 19 Patients without TP53 Mutations in Myeloid-Derived Cancers", 
+       x = "Chromosome", 
+       y = "-log10 Normalized Karyotype Abnormality/kbp", 
+       fill = "Mutation") +
+  theme_classic() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0),breaks = seq(0, 24, 4), limits = c(0,24)) +
+  scale_fill_manual(values = colour_palette)
+
+ggsave("normalized_myeloid_noTP53_breakdown.pdf", plot = normalized_myeloid_noTP53_breakdown, dpi = 300, width = 10, height = 5)
+```
