@@ -12,7 +12,7 @@ library(readxl)
 library(openxlsx)
 
 # Feed in dataframe
-df <- read_excel("C:/path/to/kar_analysis_R.xlsx")
+df <- read_excel("C:/path/to/kar_analysis_raw.xlsx")
 ```
 
 
