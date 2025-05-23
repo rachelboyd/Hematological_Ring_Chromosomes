@@ -1,5 +1,6 @@
 # Ring_Chromosome
-Analysis pipeline and figure generation for "Paper Title"
+Analysis pipeline and figure generation for "Ring Chromosomes in Hematological Malignancies Are Associated with TP53 Gene Mutations and Characteristic Copy Number Variants"
+https://www.mdpi.com/2072-6694/15/22/5439
 
 DIRECTORY
 
